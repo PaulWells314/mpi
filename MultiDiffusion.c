@@ -2,7 +2,7 @@
 #include <stdio.h>
 #define SLICE_WIDTH 64
 #define OVERLAP 8
-#define NUM_SLICES 2
+#define NUM_SLICES 4
 
 float un[SLICE_WIDTH * NUM_SLICES];
 float un_1[SLICE_WIDTH * NUM_SLICES];
@@ -50,8 +50,8 @@ int main(int argc, char **argv) {
     float * p2;
     float * ptemp;
     int i, j;
-    MPI_Status  stats[NUM_SLICES];
-    MPI_Request requests[NUM_SLICES];
+    MPI_Status  stats[2*NUM_SLICES+2];
+    MPI_Request requests[2*NUM_SLICES+2];
     int ierr;
 
     MPI_Init(&argc, &argv);
@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
             local_data[j] = *(un+j);
         }
 
-      
+        // send starting data to other processes
         for (i= 1; i < NUM_SLICES; i++)
         {
             MPI_Isend(un + (SLICE_WIDTH-2* OVERLAP) * i, SLICE_WIDTH, MPI_FLOAT, i, 0, MPI_COMM_WORLD, &requests[i]);
@@ -75,21 +75,26 @@ int main(int argc, char **argv) {
         MPI_Waitall(NUM_SLICES-1, &requests[1], &stats[1]);
 
         for (j=0; j< 8192; j++)
-{
-
-        for (i=0; i < OVERLAP/2; i++)
         {
-            update_signal(local_data, local_data_1, 0, SLICE_WIDTH);
-        }
+           //printf("process 0 step %d\n", j);
 
-        for (i=0; i < OVERLAP/2; i++)
-        {
-            update_signal(local_data_1, local_data, 0, SLICE_WIDTH);
+           // update from A to B
+           for (i=0; i < OVERLAP/2; i++)
+           {
+              update_signal(local_data, local_data_1, 0, SLICE_WIDTH);
+           }
+
+           // update from B to A
+           for (i=0; i < OVERLAP/2; i++)
+           {
+              update_signal(local_data_1, local_data, 0, SLICE_WIDTH);
+           }
+
+           // send/receive overlaps
+           MPI_Isend(local_data + (SLICE_WIDTH- 2 * OVERLAP), OVERLAP, MPI_FLOAT, 1, 0, MPI_COMM_WORLD, &requests[0]);
+           MPI_Irecv(local_data + (SLICE_WIDTH -   OVERLAP), OVERLAP, MPI_FLOAT, 1, 1, MPI_COMM_WORLD, &requests[1]);
+           MPI_Waitall(2, &requests[0], &stats[0]);
         }
-        MPI_Isend(local_data + (SLICE_WIDTH- 2 *OVERLAP), OVERLAP, MPI_FLOAT, 1, 0, MPI_COMM_WORLD, &requests[0]);
-        MPI_Irecv(local_data + (SLICE_WIDTH - OVERLAP), OVERLAP, MPI_FLOAT, 1, 1, MPI_COMM_WORLD, &requests[1]);
-        MPI_Waitall(2, &requests[0], &stats[0]);
-}
 
         for (i= 1; i < NUM_SLICES; i++)
         {
@@ -97,7 +102,7 @@ int main(int argc, char **argv) {
         }
         MPI_Waitall(NUM_SLICES-1, &requests[1], &stats[1]);
 
-        for (j = 0; j < SLICE_WIDTH; j++)
+        for (j = 0; j< SLICE_WIDTH; j++)
         {
              *(un_1 +j) = local_data[j];
         }
@@ -109,7 +114,8 @@ int main(int argc, char **argv) {
         MPI_Wait(&requests[0], &stats[0]);
 
        for (j=0; j< 8192; j++)
-{
+       {
+         //printf("process  step %d\n", j);
         for (i=0; i < OVERLAP/2; i++)
         {
             update_signal(local_data, local_data_1, 0, SLICE_WIDTH);
@@ -119,10 +125,22 @@ int main(int argc, char **argv) {
         {
             update_signal(local_data_1, local_data, 0, SLICE_WIDTH);
         }
-        MPI_Isend(local_data + OVERLAP, OVERLAP, MPI_FLOAT, 0, 1, MPI_COMM_WORLD, &requests[0]);
-        MPI_Irecv(local_data, OVERLAP, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, &requests[1]);
-        MPI_Waitall(2, &requests[0], &stats[0]);
-}
+        if (my_rank == (NUM_SLICES-1))
+        {
+            MPI_Isend(local_data + OVERLAP, OVERLAP, MPI_FLOAT, my_rank-1, 2*my_rank -1, MPI_COMM_WORLD, &requests[0]);
+            MPI_Irecv(local_data, OVERLAP, MPI_FLOAT, my_rank-1, 2* my_rank-2, MPI_COMM_WORLD, &requests[1]);
+            MPI_Waitall(2, &requests[0], &stats[0]);
+        }
+        else
+        {
+            MPI_Isend(local_data + OVERLAP, OVERLAP, MPI_FLOAT, my_rank-1, 2*my_rank-1, MPI_COMM_WORLD, &requests[0]);
+            MPI_Irecv(local_data, OVERLAP, MPI_FLOAT, my_rank-1, 2*my_rank-2, MPI_COMM_WORLD, &requests[1]);
+            MPI_Irecv(local_data + SLICE_WIDTH - OVERLAP, OVERLAP, MPI_FLOAT, my_rank+1, 2*my_rank+1, MPI_COMM_WORLD, &requests[2]);
+            MPI_Isend(local_data + SLICE_WIDTH - 2 *OVERLAP, OVERLAP, MPI_FLOAT, my_rank+1, 2*my_rank, MPI_COMM_WORLD, &requests[3]);
+            MPI_Waitall(4, &requests[0], &stats[0]);
+
+        }
+       }
         MPI_Isend(local_data, SLICE_WIDTH, MPI_FLOAT, 0, 0, MPI_COMM_WORLD, &requests[0]);
         MPI_Wait(&requests[0], &stats[0]);
     }
@@ -137,3 +155,4 @@ int main(int argc, char **argv) {
 
     MPI_Finalize();
 }
+        
